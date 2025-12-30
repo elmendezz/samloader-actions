@@ -7,6 +7,7 @@ WDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Load color definitions, exit if they're missing.
 if [ -f "$WDIR/tools/colors" ]; then
     source "$WDIR/tools/colors"
+    source "$WDIR/tools/gofile.sh"
 else
     echo "Error: Color definitions not found at '$WDIR/tools/colors'." >&2
     exit 1
@@ -223,11 +224,8 @@ main() {
     # Prepare environment
     init_submodules
     install_dependencies
-# Prepare environment
-init_submodules
-install_dependencies
-rm -rf "$WDIR/Downloads" "$WDIR/output" "$WDIR/Dist"
-mkdir -p "$WDIR/Downloads" "$WDIR/output" "$WDIR/Dist"
+    rm -rf "$WDIR/Downloads" "$WDIR/output" "$WDIR/Dist" "$WDIR/docs"
+    mkdir -p "$WDIR/Downloads" "$WDIR/output" "$WDIR/Dist" "$WDIR/docs"
 
     # Run selected mode
     if [ "$MODE" == "direct" ]; then
@@ -236,13 +234,57 @@ mkdir -p "$WDIR/Downloads" "$WDIR/output" "$WDIR/Dist"
         run_samloader_download
     fi
 
-    # Final step
-    green "\nRunning post-processing..."
+    # --- Post-processing ---
+    local GOLINK_FULL=""
+
+    # 1. Create full stock package
+    green "\nCreating full stock firmware package..."
+    # Sanitize VERSION for filename, as it can contain slashes.
+    VERSION_FILENAMEFRIENDLY=$(echo "${VERSION}" | tr '/' '_')
+    STOCK_ZIP_NAME="${MODEL}_${VERSION_FILENAMEFRIENDLY:-stock}_FULL.zip"
+    if [ -f "$WDIR/Downloads/firmware.zip" ]; then
+        cp "$WDIR/Downloads/firmware.zip" "$WDIR/Dist/$STOCK_ZIP_NAME"
+        green "Full stock package created: Dist/$STOCK_ZIP_NAME"
+        if [[ "${WORKFLOW_MODE:-0}" == "1" ]]; then
+            GOLINK_FULL=$(upload_to_gofile "$WDIR/Dist/$STOCK_ZIP_NAME")
+            if [[ -n "$GOLINK_FULL" ]]; then
+                echo "GOLINK_FULL=$GOLINK_FULL" >> $GITHUB_ENV
+            fi
+        fi
+    else
+        yellow "Warning: firmware.zip not found, skipping full stock package creation."
+    fi
+
+    # 2. Create Magisk-ready package (by running worker)
+    green "\nRunning post-processing for Magisk-ready package..."
     if ! source "$WDIR/tools/worker.sh"; then
         red "Post-processing script failed." >&2
         exit 1
     fi
-    green "Script finished successfully!"
+
+    # 3. Generate a JSON file for GitHub Pages UI
+    green "\nGenerating metadata file for GitHub Pages..."
+    JSON_FILE="$WDIR/docs/firmware_info.json"
+    # Assuming worker.sh creates its own zip file in the Dist directory.
+    MAGISK_ZIP_NAME=$(find "$WDIR/Dist" -name "*.zip" ! -name "$STOCK_ZIP_NAME" -printf "%f\n" | head -n 1)
+
+    cat > "$JSON_FILE" << EOL
+{
+  "model": "${MODEL}",
+  "version": "${VERSION:-N/A}",
+  "csc": "${CSC:-N/A}",
+  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "downloads": {
+    "full_stock_zip": "${STOCK_ZIP_NAME}",
+    "magisk_ready_zip": "${MAGISK_ZIP_NAME:-N/A}",
+    "gofile_full": "${GOLINK_FULL:-N/A}",
+    "gofile_magisk": "${GOLINK_MAGISK:-N/A}"
+  }
+}
+EOL
+    green "Metadata file created: docs/firmware_info.json"
+
+    green "\nScript finished successfully!"
 }
 
 # Run the main function with all script arguments

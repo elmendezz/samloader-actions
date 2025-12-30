@@ -9,16 +9,16 @@ upload_to_gofile() {
         return 1
     fi
 
-    echo "📤 Uploading $file to GoFile..."
+    echo "📤 Uploading $file to GoFile..." >&2
 
     local link=$(curl -s -X POST 'https://upload.gofile.io/uploadfile' -F "file=@$file" \
                  | grep -oP '"downloadPage"\s*:\s*"\K[^"]+')
 
     if [[ -n "$link" ]]; then
-        echo "✅ Link to Download: $link"
-        echo "GOLINK=$link" >> $GITHUB_ENV
+        echo "✅ Link to Download: $link" >&2
+        echo "$link"
     else
-        echo "❌ Failed to upload or fetch link."
+        echo "❌ Failed to upload or fetch link." >&2
         return 1
     fi
 }

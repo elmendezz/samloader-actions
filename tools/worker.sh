@@ -143,8 +143,11 @@ collect_and_package_files() {
     
     echo -e "\n${LIGHT_YELLOW}[i] Zip file created: ${TAR_NAME}.zip${RESET}\n"
 
-    upload_to_gofile "$WDIR/Dist/${TAR_NAME}.zip"
-
+    GOLINK_MAGISK=$(upload_to_gofile "$WDIR/Dist/${TAR_NAME}.zip")
+    if [[ -n "$GOLINK_MAGISK" ]]; then
+        # Set env for other workflow steps (e.g., Telegram)
+        echo "GOLINK_MAGISK=$GOLINK_MAGISK" >> $GITHUB_ENV
+    fi
 }
 
 # Main execution
