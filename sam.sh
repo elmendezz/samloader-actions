@@ -163,8 +163,9 @@ run_direct_download() {
     echo -e "====================================\n"
 
     green "Attempting to download firmware from the provided link...\n"
-    if ! curl -L --fail "$URL" -o "$WDIR/Downloads/firmware.zip"; then
-        red "Download failed! Please check the link and your network connection." >&2
+    # Add retry and continue logic for robustness against transient network errors
+    if ! curl -L --fail --retry 3 --retry-delay 10 --continue-at - "$URL" -o "$WDIR/Downloads/firmware.zip"; then
+        red "Download failed after multiple retries! Please check the link and your network connection." >&2
         exit 1
     fi
     green "Download completed successfully."
@@ -195,8 +196,22 @@ run_samloader_download() {
     yellow "Update found: ${VERSION}"
 
     green "Attempting to download firmware..."
-    if ! python3 -m samloader -m "${MODEL}" -r "${CSC}" -i "${IMEI}" download -v "${VERSION}" -O "$WDIR/Downloads"; then
-        red "Download failed. Did you enter the correct IMEI for your device model?" >&2
+    local max_retries=3
+    local attempt=1
+    local success=false
+    while [ $attempt -le $max_retries ] && [ "$success" = false ]; do
+        if [ $attempt -gt 1 ]; then
+            yellow "Retrying download in 15 seconds... (Attempt $attempt of $max_retries)"
+            sleep 15
+        fi
+        if python3 -m samloader -m "${MODEL}" -r "${CSC}" -i "${IMEI}" download -v "${VERSION}" -O "$WDIR/Downloads"; then
+            success=true
+        fi
+        ((attempt++))
+    done
+
+    if [ "$success" = false ]; then
+        red "Download failed after $max_retries attempts. This can be due to network issues or incorrect device details." >&2
         exit 1
     fi
     green "Download completed."
@@ -210,6 +225,57 @@ run_samloader_download() {
     fi
     rm "${FILE}"
     green "Decryption completed."
+}
+
+# Organize firmware parts into folders, zip them, and upload
+organize_and_upload_parts() {
+    local ver_name="${1:-stock}"
+    green "\n[+] Organizing and uploading firmware parts (AP, BL, CP, CSC)..."
+    
+    local EXTRACT_DIR="$WDIR/Downloads/Parts"
+    rm -rf "$EXTRACT_DIR"
+    mkdir -p "$EXTRACT_DIR"
+    
+    # Extract tars from firmware.zip
+    if [ -f "$WDIR/Downloads/firmware.zip" ]; then
+        unzip -j -o "$WDIR/Downloads/firmware.zip" "*.tar.md5" -d "$EXTRACT_DIR"
+    else
+        yellow "firmware.zip not found, skipping parts organization."
+        return
+    fi
+    
+    cd "$EXTRACT_DIR" || return
+    
+    # Create directories and move files
+    mkdir -p AP BL CP CSC
+    mv AP_*.tar.md5 AP/ 2>/dev/null
+    mv BL_*.tar.md5 BL/ 2>/dev/null
+    mv CP_*.tar.md5 CP/ 2>/dev/null
+    mv CSC_*.tar.md5 CSC/ 2>/dev/null
+    mv HOME_CSC_*.tar.md5 CSC/ 2>/dev/null
+    
+    # Process each folder
+    for part in AP BL CP CSC; do
+        if [ -n "$(ls -A $part 2>/dev/null)" ]; then
+            green "Processing $part..."
+            
+            # Extract tars inside the folder to get raw images
+            cd "$part" || continue
+            for tarfile in *.tar.md5; do
+                [ -f "$tarfile" ] && tar -xf "$tarfile" && rm "$tarfile"
+            done
+            cd ..
+            
+            # Upload if in workflow mode
+            if [[ "${WORKFLOW_MODE:-0}" == "1" ]]; then
+                local link=$(upload_to_gofile "$EXTRACT_DIR/$part")
+                if [[ -n "$link" ]]; then
+                    echo "GOLINK_${part}=$link" >> $GITHUB_ENV
+                    export GOLINK_${part}="$link"
+                fi
+            fi
+        fi
+    done
 }
 
 # --- Main Execution ---
@@ -255,6 +321,9 @@ main() {
         yellow "Warning: firmware.zip not found, skipping full stock package creation."
     fi
 
+    # 1.5 Organize and upload individual parts
+    organize_and_upload_parts "${VERSION_FILENAMEFRIENDLY}"
+
     # 2. Create Magisk-ready package (by running worker)
     green "\nRunning post-processing for Magisk-ready package..."
     if ! source "$WDIR/tools/worker.sh"; then
@@ -278,7 +347,11 @@ main() {
     "full_stock_zip": "${STOCK_ZIP_NAME}",
     "magisk_ready_zip": "${MAGISK_ZIP_NAME:-N/A}",
     "gofile_full": "${GOLINK_FULL:-N/A}",
-    "gofile_magisk": "${GOLINK_MAGISK:-N/A}"
+    "gofile_magisk": "${GOLINK_MAGISK:-N/A}",
+    "gofile_ap": "${GOLINK_AP:-N/A}",
+    "gofile_bl": "${GOLINK_BL:-N/A}",
+    "gofile_cp": "${GOLINK_CP:-N/A}",
+    "gofile_csc": "${GOLINK_CSC:-N/A}"
   }
 }
 EOL
