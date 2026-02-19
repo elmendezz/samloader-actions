@@ -268,7 +268,7 @@ organize_and_upload_parts() {
             
             # Upload if in workflow mode
             if [[ "${WORKFLOW_MODE:-0}" == "1" ]]; then
-                local link=$(upload_to_gofile "$EXTRACT_DIR/$part")
+                local link=$(upload_to_gofile "$EXTRACT_DIR/$part" || upload_to_filebin "$EXTRACT_DIR/$part")
                 if [[ -n "$link" ]]; then
                     echo "GOLINK_${part}=$link" >> $GITHUB_ENV
                     export GOLINK_${part}="$link"
@@ -312,7 +312,7 @@ main() {
         cp "$WDIR/Downloads/firmware.zip" "$WDIR/Dist/$STOCK_ZIP_NAME"
         green "Full stock package created: Dist/$STOCK_ZIP_NAME"
         if [[ "${WORKFLOW_MODE:-0}" == "1" ]]; then
-            GOLINK_FULL=$(upload_to_gofile "$WDIR/Dist/$STOCK_ZIP_NAME")
+            GOLINK_FULL=$(upload_to_gofile "$WDIR/Dist/$STOCK_ZIP_NAME" || upload_to_filebin "$WDIR/Dist/$STOCK_ZIP_NAME")
             if [[ -n "$GOLINK_FULL" ]]; then
                 echo "GOLINK_FULL=$GOLINK_FULL" >> $GITHUB_ENV
             fi
