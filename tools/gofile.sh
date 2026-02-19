@@ -69,14 +69,16 @@ upload_to_filebin() {
         
         for file in "$target"/*; do
             if [ -f "$file" ]; then
-                echo "   Uploading $(basename "$file")..." >&2
+                local filename=$(basename "$file")
+                echo "   Uploading $filename..." >&2
                 
-                local url="https://filebin.net/"
+                local url="https://filebin.net/$filename"
                 if [ -n "$bin_id" ]; then
-                    url="https://filebin.net/$bin_id"
+                    url="https://filebin.net/$bin_id/$filename"
                 fi
 
-                local response=$(curl -s -X POST "$url" --data-binary "@$file" -H "accept: application/json")
+                # Use -T (PUT) to avoid OOM on large files and fix filename headers
+                local response=$(curl -s -T "$file" "$url" -H "accept: application/json")
                 
                 if [ -z "$bin_id" ]; then
                     bin_id=$(echo "$response" | python3 -c "import sys, json; print(json.load(sys.stdin).get('bin', {}).get('id'))" 2>/dev/null)
@@ -85,10 +87,6 @@ upload_to_filebin() {
                     fi
                 fi
                 
-                if [ -z "$bin_id" ]; then
-                    echo "❌ Error uploading $(basename "$file") to Filebin: $response" >&2
-                    return 1 # Fail fast for folder upload
-                fi
                 sleep 1
             fi
         done
@@ -96,7 +94,8 @@ upload_to_filebin() {
 
     elif [[ -f "$target" ]]; then
         echo "📤 Uploading $target to Filebin.net..." >&2
-        local response=$(curl -s -X POST "https://filebin.net/" --data-binary "@$target" -H "accept: application/json")
+        local filename=$(basename "$target")
+        local response=$(curl -s -T "$target" "https://filebin.net/$filename" -H "accept: application/json")
         local bin_id=$(echo "$response" | python3 -c "import sys, json; print(json.load(sys.stdin).get('bin', {}).get('id'))" 2>/dev/null)
         
         if [ -n "$bin_id" ]; then
@@ -105,6 +104,43 @@ upload_to_filebin() {
             echo "❌ Failed to upload to Filebin: $response" >&2
             return 1
         fi
+    fi
+}
+
+# --- File.io Fallback Function ---
+upload_to_fileio() {
+    local target="$1"
+    echo "⚠️ Filebin upload failed. Trying fallback: file.io" >&2
+
+    local file_to_upload="$target"
+    local temp_zip=""
+
+    if [[ -d "$target" ]]; then
+        echo "📤 file.io does not support folders. Zipping '$(basename "$target")' for upload..." >&2
+        temp_zip=$(mktemp).zip
+        (cd "$target" && zip -r -j "$temp_zip" .)
+        file_to_upload="$temp_zip"
+    fi
+
+    if [[ -f "$file_to_upload" ]]; then
+        echo "📤 Uploading $(basename "$file_to_upload") to file.io..." >&2
+        
+        local response=$(curl -s -F "file=@$file_to_upload" https://file.io)
+        local success=$(echo "$response" | python3 -c "import sys, json; print(json.load(sys.stdin).get('success'))" 2>/dev/null)
+
+        if [ "$success" == "True" ]; then
+            local link=$(echo "$response" | python3 -c "import sys, json; print(json.load(sys.stdin).get('link'))" 2>/dev/null)
+            echo "$link"
+        else
+            echo "❌ Failed to upload to file.io: $response" >&2
+            [ -n "$temp_zip" ] && rm -f "$temp_zip"
+            return 1
+        fi
+        
+        [ -n "$temp_zip" ] && rm -f "$temp_zip"
+    else
+        echo "❌ File/Directory not found for file.io upload: $target" >&2
+        return 1
     fi
 }
 

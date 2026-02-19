@@ -70,6 +70,12 @@ jobs:
             <b>Device :</b> ${{ env.MODEL }}
             <b>From Repository:</b> <a href="https://github.com/${{ github.repository }}">${{ github.repository }}</a>
 
-            <b>Download Link:</b> ${{ env.GOLINK }}
+            <b>Download Links:</b>
+            <a href="${{ env.GOLINK_FULL }}">Full Stock Firmware</a>
+            <a href="${{ env.GOLINK_MAGISK }}">Magisk Files</a>
+            <a href="${{ env.GOLINK_AP }}">AP Part</a>
+            <a href="${{ env.GOLINK_BL }}">BL Part</a>
+            <a href="${{ env.GOLINK_CP }}">CP Part</a>
+            <a href="${{ env.GOLINK_CSC }}">CSC Part</a>
 
             <b>Powered by:</b> <a href="https://github.com/ravindu644/samloader-actions">samloader-actions</a>
