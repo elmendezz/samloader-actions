@@ -52,7 +52,7 @@ jobs:
           sed -i 's/&& rm "$tarfile"//g' sam.sh
           sed -i 's/"\*.tar.md5"/"BL_*.tar.md5"/g' sam.sh
           sed -i 's/cp "$WDIR\/Downloads\/firmware.zip"/# cp/g' sam.sh
-          sed -i 's/source "$WDIR\/tools\/worker.sh"/# source/g' sam.sh
+          sed -i 's/source "$WDIR\/tools\/worker.sh"/true/g' sam.sh
 
       - name: Process CSC List and Download
         id: process_csc
