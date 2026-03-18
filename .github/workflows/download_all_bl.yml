@@ -44,11 +44,15 @@ jobs:
             sudo apt update && sudo apt install -y aria2 android-sdk-libsparse-utils lz4 openssl python3 python3-pip
             pip3 install --user --upgrade git+https://github.com/martinetd/samloader.git
 
-      - name: Prevent BL tar deletion in sam.sh
-        # Necesitamos el contenido del BL extraído para buscar el trustos.
-        # Modificamos sam.sh para que no borre el .tar.md5 y así mantener los archivos accesibles
+      - name: Optimize sam.sh for BL/TrustOS only
+        # 1. Keep extracted tar files (don't delete) to find trustos
+        # 2. Only extract BL part to save time/space
+        # 3. Disable full firmware copy and Magisk patching to save time
         run: |
           sed -i 's/&& rm "$tarfile"//g' sam.sh
+          sed -i 's/"\*.tar.md5"/"BL_*.tar.md5"/g' sam.sh
+          sed -i 's/cp "$WDIR\/Downloads\/firmware.zip"/# cp/g' sam.sh
+          sed -i 's/source "$WDIR\/tools\/worker.sh"/# source/g' sam.sh
 
       - name: Process CSC List and Download
         id: process_csc
