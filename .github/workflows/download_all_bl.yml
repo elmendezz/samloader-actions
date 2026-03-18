@@ -1,0 +1,153 @@
+name: Download All BLs & TrustOS (Multi-CSC)
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model Number (e.g., SM-G998B)'
+        required: true
+      imei:
+        description: 'IMEI (Required for Samloader)'
+        required: true
+      csc_list:
+        description: 'List of CSCs to check (comma separated)'
+        required: true
+        default: 'TPA,MXO,COO,XAA,ZTO,ARO,PEO,CHO,BVO,OUO'
+      upload_to_telegram:
+        description: 'Upload to Telegram'
+        type: boolean
+        required: true
+        default: false
+      cleanup_space_before_run:
+        description: 'Cleanup space before run'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  download-bl-trustos:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free disk space
+        if: ${{ github.event.inputs.cleanup_space_before_run == 'true' }}
+        run: |
+          sudo bash tools/util_free_space.sh
+
+      - name: Install Dependencies
+        run: |
+            sudo apt update && sudo apt install -y aria2 android-sdk-libsparse-utils lz4 openssl python3 python3-pip
+            pip3 install --user --upgrade git+https://github.com/martinetd/samloader.git
+
+      - name: Prevent BL tar deletion in sam.sh
+        # Necesitamos el contenido del BL extraído para buscar el trustos.
+        # Modificamos sam.sh para que no borre el .tar.md5 y así mantener los archivos accesibles
+        run: |
+          sed -i 's/&& rm "$tarfile"//g' sam.sh
+
+      - name: Process CSC List and Download
+        id: process_csc
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          # Directorios de recolección
+          mkdir -p Collected_BLs
+          mkdir -p Collected_TrustOS
+          
+          # Cargar funciones de GoFile para subir el trustos por separado
+          chmod +x tools/gofile.sh
+          source tools/gofile.sh
+          
+          IFS=',' read -r -a CSC_ARRAY <<< "${{ github.event.inputs.csc_list }}"
+          echo "WORKFLOW_MODE=1" >> $GITHUB_ENV
+          
+          for CSC in "${CSC_ARRAY[@]}"; do
+             CSC=$(echo $CSC | xargs)
+             [ -z "$CSC" ] && continue
+             
+             echo "::group::Processing CSC: $CSC"
+             echo "------------------------------------------------"
+             echo "Starting download for Model: ${{ github.event.inputs.model }}, CSC: $CSC"
+             echo "------------------------------------------------"
+             
+             # Ejecutar sam.sh. Si falla, continuamos con el siguiente CSC
+             if bash sam.sh --model "${{ github.event.inputs.model }}" --imei "${{ github.event.inputs.imei }}" --csc "$CSC"; then
+                echo "✅ Download success for $CSC"
+                
+                if [ -d "Downloads/Parts/BL" ]; then
+                    # 1. Archivar BL completo para el artifact general
+                    mkdir -p "Collected_BLs/$CSC"
+                    cp -r Downloads/Parts/BL/* "Collected_BLs/$CSC/"
+
+                    # 2. Lógica específica para TrustOS
+                    # Buscamos trustos.img, tos.img, tos_sign.img, etc (incluyendo .lz4)
+                    TOS_PATH=$(find Downloads/Parts/BL -type f \( -name "*trustos*" -o -name "*tos_sign*" -o -name "*tos.img*" \) | head -n 1)
+                    
+                    TOS_MSG_PART=""
+                    
+                    if [ -n "$TOS_PATH" ]; then
+                        echo "🔍 Found TrustOS candidate: $TOS_PATH"
+                        
+                        # Intentar extraer el BIT (binary version) del nombre del archivo BL
+                        # Ejemplo: BL_A032FXXU2AVC1 -> Busca la 'U' o 'S' seguida de un número/letra (2)
+                        BL_TAR=$(find Downloads/Parts/BL -name "BL_*.tar.md5" | head -n 1)
+                        if [ -n "$BL_TAR" ]; then
+                             BL_NAME=$(basename "$BL_TAR")
+                             BIT=$(echo "$BL_NAME" | grep -oP '[US]\K[0-9A-Z](?=[A-Z0-9]{3,})' | head -n 1)
+                             [ -z "$BIT" ] && BIT="latestbinary"
+                        else
+                             BIT="latestbinary"
+                        fi
+                        
+                        # Formatear nombre: trustos_s{BIT}_{MODEL}_{CSC}.img
+                        MODEL_CLEAN=$(echo "${{ github.event.inputs.model }}" | sed 's/SM-//g' | tr '[:upper:]' '[:lower:]')
+                        CSC_LOWER=$(echo "$CSC" | tr '[:upper:]' '[:lower:]')
+                        NEW_TOS_NAME="trustos_s${BIT}_${MODEL_CLEAN}_${CSC_LOWER}.img"
+                        
+                        # Descomprimir si es .lz4
+                        if [[ "$TOS_PATH" == *.lz4 ]]; then
+                            lz4 -d "$TOS_PATH" "$NEW_TOS_NAME"
+                        else
+                            cp "$TOS_PATH" "$NEW_TOS_NAME"
+                        fi
+                        
+                        # Subir a GoFile individualmente
+                        echo "☁️ Uploading $NEW_TOS_NAME to GoFile..."
+                        TOS_LINK=$(upload_to_gofile "$NEW_TOS_NAME" || upload_to_filebin "$NEW_TOS_NAME" || upload_to_fileio "$NEW_TOS_NAME")
+                        echo "🔗 TrustOS Link: $TOS_LINK"
+                        
+                        # Guardar en carpeta para Artifacts
+                        cp "$NEW_TOS_NAME" "Collected_TrustOS/"
+                        
+                        # Añadir al mensaje de Telegram
+                        if [ -n "$TOS_LINK" ]; then
+                             TOS_MSG_PART="%0A%0A<b>TrustOS File:</b> <a href=\"$TOS_LINK\">Download ${NEW_TOS_NAME}</a>"
+                        fi
+                        rm "$NEW_TOS_NAME"
+                    fi
+                fi
+                
+                # Enviar notificación a Telegram
+                if [ "${{ github.event.inputs.upload_to_telegram }}" == "true" ]; then
+                    BL_LINK=$(grep "GOLINK_BL=" $GITHUB_ENV | tail -1 | cut -d'=' -f2)
+                    MSG="<b>New BL Dump 📂..!</b>%0A%0A<b>Device :</b> ${{ github.event.inputs.model }}%0A<b>Region :</b> $CSC%0A<b>BL Link :</b> <a href=\"$BL_LINK\">Download BL Part</a>${TOS_MSG_PART}"
+                    
+                    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" -d chat_id="${TELEGRAM_CHAT_ID}" -d text="$MSG" -d parse_mode="HTML" -d disable_web_page_preview="false"
+                fi
+             else
+                echo "❌ Download failed for $CSC (or no update found) - Skipping."
+             fi
+             echo "::endgroup::"
+          done
+
+      - name: Upload Collected TrustOS Images
+        uses: actions/upload-artifact@v4
+        with:
+          name: "TrustOS_Collection_${{ github.event.inputs.model }}"
+          path: Collected_TrustOS/
